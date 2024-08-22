@@ -8,10 +8,12 @@ from flask_cors import CORS
 import datetime
 from typing import List
 from marshmallow import ValidationError, fields, validate
+import os
 
 app = Flask(__name__) # instantiate our app 
 CORS(app) 
-app.config["SQLALCHEMY_DATABASE_URI"] = "mysql+mysqlconnector://root:SydneyARCHTsql1!@localhost/e_comm_api_db"
+app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv('DATABASE_URL')
+# app.config["SQLALCHEMY_DATABASE_URI"] = "mysql+mysqlconnector://root:SydneyARCHTsql1!@localhost/e_comm_api_db"
 
 class Base(DeclarativeBase): 
     pass
