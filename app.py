@@ -29,6 +29,10 @@ class Customer(Base):
     customer_account: Mapped["CustomerAccount"] = db.relationship(back_populates="customer")
     orders: Mapped[List["Order"]] = db.relationship(back_populates="customer")
 
+    def __repr__(self):
+        return {"customer_id": self.customer_id, "name": self.name, "email": self.email, "phone":self.phone}
+        
+
 
 class CustomerAccount(Base):
     __tablename__ = "Customer_Accounts"
@@ -63,6 +67,8 @@ class Product(Base):
 with app.app_context(): 
     db.create_all()
 
+
+# ====================================== CUSTOMERS =============================================
 # Customer Schema
 class CustomerSchema(ma.Schema):
     customer_id = fields.Integer()
@@ -85,6 +91,9 @@ def get_customers():
     # SELECT * FROM Customers
     result = db.session.execute(query).scalars() 
     customers = result.all() 
+    for customer in customers:
+        for order in customer.orders:
+            print(order.products)
     return customers_schema.jsonify(customers)
 
 # Adding a Customer
@@ -102,7 +111,11 @@ def add_customer():
             new_customer = Customer(name=name, email=email, phone=phone) 
             session.add(new_customer) 
             session.commit()
+
     return jsonify({"message": "New Customer successfully added."}), 201 
+# ^^^^^^^^^^^ Coming back to this one^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 
 # Updating a Customer
 @app.route("/customers/<int:id>", methods=["PUT"])
@@ -115,12 +128,14 @@ def update_customer(id):
                 return jsonify({"message": "Customer not found"}), 404     
             customer = result 
             try: 
+                print("Request JSON:", request.json)  # Add this line
                 customer_data = customer_schema.load(request.json) 
             except ValidationError as e: 
                 return jsonify(e.messages), 400 
             for field, value in customer_data.items():
                 setattr(customer, field, value) 
             session.commit() 
+
     return jsonify({"message": "Customer details updated successfully"}), 200 
 
 
@@ -171,6 +186,7 @@ def add_customer_account():
             new_account = CustomerAccount(username=username, password=password, customer_id=customer_id)
             session.add(new_account)
             session.commit()
+
         return jsonify({"message": "New Customer successfully added!"}), 201 
     
 
@@ -204,7 +220,7 @@ def delete_customer_account(account_id):
             session.delete(result)
             return jsonify({"message": "Customer has been deleted."}), 200 
 
-
+# ====================================== PRODUCTS =============================================
 # For Products
 class ProductSchema(ma.Schema):
     product_id = fields.Integer(required=False)
@@ -226,6 +242,35 @@ def get_products():
     products = result.all()
     return products_schema.jsonify(products) 
 
+#get products by id
+@app.route("/products/<int:product_id>", methods=["GET"])
+def get_product_by_id(product_id):
+    query = select(Product).filter(Product.product_id == product_id)
+    result = db.session.execute(query).scalar()
+    print(result)
+    if result is None:
+        return jsonify({"error": "Product not found"}), 404 # not found
+    product = result
+    try:
+        
+        return product_schema.jsonify(product)
+    except ValidationError as err:
+        return jsonify(err.messages), 400 # Bad request
+
+
+# get product by name
+@app.route("/products/by-name", methods=["GET"])
+def get_product_by_name():
+    name = request.args.get("name")
+    search = f"%{name}%" #% is a wildcard
+    # use % with LIKE to find partial matches
+    query = select(Product).where(Product.name.like(search)).order_by(Product.price.asc())
+
+    products = db.session.execute(query).scalars().all()
+    print(products)
+
+    return products_schema.jsonify(products)
+
 
 # Creating a Product
 @app.route("/products", methods=["POST"])
@@ -243,27 +288,32 @@ def add_product():
 
 
 # Updating a Product by ID
-@app.route("/products/<int:product_id>", methods =["PUT"])
+@app.route("/products/<int:product_id>", methods=["PUT"])
 def update_product(product_id):
     with Session(db.engine) as session:
         with session.begin():
             query = select(Product).filter(Product.product_id == product_id)
-            result = session.execute(query).scalar() 
-            print(result)
+            result = session.execute(query).scalar() # the same as scalars().first() - first result in the scalars object
+            print(result)            
+            
             if result is None:
-                return jsonify({"error": "Product not found"}), 404 
+                return jsonify({"error": "Product not found!"}), 404
             product = result
             try:
+                #validate input
                 product_data = product_schema.load(request.json)
             except ValidationError as err:
-                return jsonify(err.messages), 400 
+                #if we get an error let them know
+                return jsonify(err.messages), 400
+            #now we can actually update the values
             for field, value in product_data.items():
-                setattr(product,field, value)
+                setattr(product, field, value)
+
             session.commit()
-            return jsonify({"Message":f"Product with id of {product_id} updated successfully"}), 200 
+            return jsonify({"message": "Product details succesfully updated!"}), 200 #200 as we have successfully updated
 
 
-# Deleting a Product
+# Deleting a Product by ID
 @app.delete("/products/<int:product_id>")
 def delete_product(product_id):
     delete_statment = delete(Product).where(Product.product_id == product_id)
@@ -274,99 +324,137 @@ def delete_product(product_id):
         return jsonify({"message":"Product has been deleted successfully"}), 200
 
 
+
+# ====================================== ORDERS =============================================
 # For Orders
 class OrderSchema(ma.Schema):
-    order_id = fields.Integer(required= False)
-    customer_id = fields.Integer(required = True)
-    date = fields.Date(required=True) #"2024-07-05"
-    product_id = fields.List(fields.Integer(), required= False)
+    order_id = fields.Integer(required=False)
+    customer_id = fields.Integer(required=True)
+    date = fields.Date(required=True)
+    products = fields.List(fields.Nested(ProductSchema))
+
     class Meta:
-        fields = ("order_id","customer_id","date","product_id")
-# Instance of Schemas
+        fields = ("order_id", "customer_id", "date", "products")
+# instantiating our Schemas
 order_schema = OrderSchema()
 orders_schema = OrderSchema(many=True)
 
-
-# Getting All Orders
-@app.get("/orders") 
-def get_orders():
-    query = select(Order) 
-    result = db.session.execute(query).scalars().all()
-    orders_with_products = []
-    orders = result
-    for order in orders:
-        order_dict = {
-            "order_id": order.order_id,
-            "customer_id": order.customer_id,
-            "date": order.date,
-            "products": [product.product_id for product in order.products]
-        }
-        orders_with_products.append(order_dict)
-    return jsonify(orders_with_products)
-
-
-# Creating an Order
-@app.post("/orders")
+# creating an order
+@app.route("/add-order", methods=["POST"])
 def add_order():
     try:
-        order_data = order_schema.load(request.json)
-    except ValidationError as err:    
+        json_order = request.json
+        products = json_order.pop('products', [])
+        if not products:
+            return jsonify({"Error": "Cannot place an order without products"}), 400
+
+        # Validate the order data excluding products
+        order_data = order_schema.load(json_order)
+    except ValidationError as err:
+        # If there's a validation error, return a 400 response with error messages
         return jsonify(err.messages), 400
-    product_ids = order_data.get('product_id', [])
-    new_order = Order(
-        customer_id=order_data['customer_id'],
-        date=order_data['date']
-    )
+
+    # Create a new session
     with Session(db.engine) as session:
         with session.begin():
-            for product_id in product_ids:
-                product = session.query(Product).get(product_id)
+            # Create a new order instance
+            new_order = Order(customer_id=order_data['customer_id'], date=order_data['date'])
+
+            # Populate order products using product IDs passed in via JSON
+            for id in products:
+                product = session.execute(select(Product).filter(Product.product_id == id)).scalar()
                 if product:
                     new_order.products.append(product)
+                else:
+                    return jsonify({"Error": f"Product with ID {id} not found"}), 404
+            
+            # Add and commit the new order
             session.add(new_order)
             session.commit()
-    return jsonify({"message": "Order added successfully"}), 201
+            print("new order made")
+
+    # Return a success message with a 201 status code
+    return jsonify({"message": "New order successfully added!"}), 201
 
 
-# Update Orders by ID
-@app.put("/orders/<int:order_id>")
-def update_orders(order_id):
+#get all orders
+@app.route("/orders", methods=["GET"])
+def get_orders():
+    query = select(Order)
+    result = db.session.execute(query).scalars()
+    products = result.all()
+    return orders_schema.jsonify(products)
+#get order by id
+@app.route("/orders/<int:order_id>", methods=["GET"])
+def get_orders_by_id(order_id):
+    query = select(Order).filter(Order.order_id==order_id)
+    result = db.session.execute(query).scalars()
+    if result is None:
+            return jsonify({"message": "Order Not Found"}), 404
+    order = result.all()
+    try:
+        return orders_schema.jsonify(order)
+    except ValidationError as err:
+            #if we error let them know
+            return jsonify(err.messages), 400
+
+# update an order by its ID
+@app.route('/orders/<int:order_id>', methods=["PUT"])
+def update_order(order_id):
+    try:
+        json_order = request.json
+        products = json_order.pop('products', None)
+        
+        # Validate the order data excluding products
+        order_data = order_schema.load(json_order, partial=True)
+    except ValidationError as err:
+        return jsonify(err.messages), 400
+    
     with Session(db.engine) as session:
         with session.begin():
             query = select(Order).filter(Order.order_id == order_id)
-            result = session.execute(query).scalar() 
+            result = session.execute(query).scalar()
             if result is None:
-                return jsonify({"message":"Order not found!"})
+                return jsonify({"message": "Order Not Found"}), 404
+            
             order = result
-            try:
-                order_data = order_schema.load(request.json)
-            except ValidationError as err:
-                return jsonify(err.messages), 400
-            order.customer_id = order_data.get('customer_id', order.customer_id)
-            order.date = order_data.get('date', order.date)
-            product_ids = order_data.get('product_id', [])
-            order.products.clear() 
-            for product_id in product_ids:
-                product = session.query(Product).get(product_id)
-                if product:
-                    order.products.append(product)
+            
+            for field, value in order_data.items():
+                setattr(order, field, value)
+            
+            # If products are provided, update the products associated with the order
+            if products is not None:
+                order.products.clear()
+                for id in products:
+                    product = session.execute(select(Product).filter(Product.product_id == id)).scalar()
+                    if product:
+                        order.products.append(product)
+                    else:
+                        return jsonify({"Error": f"Product with ID {id} not found"}), 404
+
             session.commit()
-            return jsonify({"message":f"Order: {order_id} has been updated."}), 200
-    
-# Deleting Orders
-@app.delete("/orders/<int:order_id>")
+            
+    return jsonify({"message": "Order was successfully updated!"}), 200
+
+
+#Delete an order by its ID
+@app.route("/orders/<int:order_id>", methods=["DELETE"])
 def delete_order(order_id):
-    delete_statement = delete(Order).where(Order.order_id == order_id)
+    delete_statement = delete(Order).where(Order.order_id==order_id)
     with db.session.begin():
         result = db.session.execute(delete_statement)
         if result.rowcount == 0:
-            return jsonify({"Error":f"Order with ID: {order_id} doesnt exist."})
-        return jsonify({"message":"Order has been deleted successfully"})
+            return jsonify({"error": "Order not found" }), 404
+        return jsonify({"message": "Order removed successfully"}), 200
 
 
-@app.route("/") 
-def home(): 
-    return "Welcome to my first Testing API, fingers crossed. " 
 
-if __name__ == "__main__": 
-    app.run(debug=True, port=5000)
+@app.route("/")
+def home():
+    return "<h1>This a tasty api</h1>"
+
+
+
+if __name__ == "__main__": #check that the file we're in is the file thats being run
+    app.run(debug=True) #if so we run our application and turn on the debugger
+
